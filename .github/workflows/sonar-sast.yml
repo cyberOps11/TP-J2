@@ -18,7 +18,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v4
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOSTE_URL }}
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@master

@@ -19,6 +19,9 @@ jobs:
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOSTE_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=juice-shop-sast
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@master

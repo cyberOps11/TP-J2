@@ -22,6 +22,7 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=juice-shop-sast
+            -Dsonar.ws.timeout=300
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@master

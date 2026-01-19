@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0  # Indispensable pour une analyse Sonar complète
 
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOSTS_URL: ${{ secrets.SONAR_HOSTS_URL }}
@@ -26,6 +26,8 @@ jobs:
           args: >
             -Dsonar.projectKey=juice-shop-sast
             -Dsonar.ws.timeout=300
+            -Dsonar.scanner.skipJreProvisioning=true
+            -Dsonar.verbose=true
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@v1

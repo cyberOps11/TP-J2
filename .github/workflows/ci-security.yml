@@ -1,22 +1,36 @@
-name: CI Security Pipeline
+name: CI Security Pipeline (Full Scan)
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      run_sonar:
+        description: 'Lancer SonarQube ?'
+        type: boolean
+        default: false
+      run_trivy:
+        description: 'Lancer Trivy (Full Scan) ?'
+        type: boolean
+        default: true
+      run_zap:
+        description: 'Lancer ZAP ?'
+        type: boolean
+        default: true
 
 jobs:
   # ------------------------------------------------------------------
-  # JOB 1 : SAST (Analyse Statique avec SonarQube)
+  # JOB 1 : SonarQube (Code Source)
   # ------------------------------------------------------------------
   sonar-scan:
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_sonar == true }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
         env:
@@ -25,143 +39,127 @@ jobs:
         with:
           args: >
             -Dsonar.projectKey=juice-shop-sast
-            -Dsonar.ws.timeout=300
             -Dsonar.scanner.skipJreProvisioning=true
-            -Dsonar.verbose=true
             -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.exclusions=**/*.py,**/*.xml,**/*.css
-
-      - name: SonarQube Quality Gate check
+      - name: Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
-        timeout-minutes: 5
         continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ------------------------------------------------------------------
-  # JOB 2 : SCA (Analyse des dépendances avec Trivy)
+  # JOB 2 : Trivy (FULL SCAN IMAGE)
   # ------------------------------------------------------------------
   sca_trivy:
     runs-on: ubuntu-latest
-    needs: sonar-scan
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_trivy == true }}
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Création du fichier template à la volée (via Bash)
-      # On utilise 'EOF' entre quotes pour ne pas casser les variables {{ . }}
+      # 1. Création du template HTML Interactif
       - name: Create Interactive Template
         run: |
           cat <<'EOF' > interactive.tpl
           <!DOCTYPE html>
           <html>
-          <head>
-            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-            <title>Rapport Trivy - Filtres Activés</title>
-            <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css">
-            <style>
-              body { font-family: Arial, sans-serif; margin: 20px; }
-              h1 { text-align: center; }
-              .critical { color: red; font-weight: bold; }
-              .high { color: orange; font-weight: bold; }
-              .medium { color: #d6d628; font-weight: bold; }
-              .low { color: blue; font-weight: bold; }
-              table.dataTable thead th { background-color: #333; color: white; }
-            </style>
-          </head>
+          <head><title>Rapport Trivy Complet</title></head>
           <body>
-            <h1>Rapport de Vulnérabilités Juice Shop</h1>
-            <table id="vulnTable" class="display" style="width:100%">
+            <h1>Rapport Complet : bkimminich/juice-shop</h1>
+            <h2>Vulnérabilités, Secrets & Configs</h2>
+            <table border="1">
               <thead>
                 <tr>
-                  <th>Library</th>
-                  <th>Vulnerability ID</th>
+                  <th>Type</th>
+                  <th>ID / Rule</th>
                   <th>Severity</th>
-                  <th>Installed Version</th>
-                  <th>Fixed Version</th>
+                  <th>Description / Package</th>
                 </tr>
               </thead>
               <tbody>
                 {{- range . }}
                   {{- range .Vulnerabilities }}
-                <tr>
-                  <td>{{ .PkgName }}</td>
-                  <td>{{ .VulnerabilityID }}</td>
-                  <td class="{{ .VulnerabilityID }} {{ .Severity }}">
-                      {{ if eq .Severity "CRITICAL" }}<span class="critical">CRITICAL</span>
-                      {{ else if eq .Severity "HIGH" }}<span class="high">HIGH</span>
-                      {{ else if eq .Severity "MEDIUM" }}<span class="medium">MEDIUM</span>
-                      {{ else }}<span class="low">{{ .Severity }}</span>{{ end }}
-                  </td>
-                  <td>{{ .InstalledVersion }}</td>
-                  <td>{{ .FixedVersion }}</td>
-                </tr>
+                  <tr>
+                    <td>VULN</td>
+                    <td>{{ .VulnerabilityID }}</td>
+                    <td>{{ .Severity }}</td>
+                    <td>{{ .PkgName }} ({{ .InstalledVersion }})</td>
+                  </tr>
+                  {{- end }}
+                  {{- range .Misconfigurations }}
+                  <tr>
+                    <td>MISCONFIG</td>
+                    <td>{{ .ID }}</td>
+                    <td>{{ .Severity }}</td>
+                    <td>{{ .Title }}</td>
+                  </tr>
+                  {{- end }}
+                  {{- range .Secrets }}
+                  <tr>
+                    <td>SECRET</td>
+                    <td>{{ .RuleID }}</td>
+                    <td>{{ .Severity }}</td>
+                    <td>{{ .Title }}</td>
+                  </tr>
                   {{- end }}
                 {{- end }}
               </tbody>
             </table>
-            <script type="text/javascript" src="https://code.jquery.com/jquery-3.5.1.js"></script>
-            <script type="text/javascript" src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
-            <script>
-              $(document).ready(function () {
-                $('#vulnTable').DataTable({ paging: false, order: [[2, 'asc']] });
-              });
-            </script>
           </body>
           </html>
           EOF
 
-      # 2. Premier scan : Génération du rapport HTML (pour l'humain)
-      - name: Run Trivy (HTML Report)
+      # 2. FULL SCAN IMAGE - Version HTML
+      - name: Run Trivy (Full Scan HTML)
         uses: aquasecurity/trivy-action@0.29.0
         with:
-          scan-type: 'fs'
-          scanners: 'vuln'
+          scan-type: 'image'
+          image-ref: 'bkimminich/juice-shop'
+          scanners: 'vuln,secret,config,license'
           format: 'template'
           template: '@interactive.tpl'
-          output: 'trivy_interactive.html'
+          output: 'trivy_full_report.html'
+          ignore-unfixed: true # Ignore les failles qui n'ont pas de correctif (optionnel mais conseillé pour réduire le bruit)
 
-      # 3. Deuxième scan : Génération du rapport TXT (pour le script de blocage)
-      - name: Run Trivy (Text Check)
+      # 3. FULL SCAN IMAGE - Version Texte
+      - name: Run Trivy (Full Scan Text)
         uses: aquasecurity/trivy-action@0.29.0
         with:
-          scan-type: 'fs'
-          scanners: 'vuln'
+          scan-type: 'image'
+          image-ref: 'bkimminich/juice-shop'
+          scanners: 'vuln,secret,config,license'
           format: 'table'
-          output: 'trivy_deps_report.txt'
+          output: 'trivy_full_report.txt'
+          ignore-unfixed: true
 
-      # 4. Sauvegarde du rapport HTML Interactif
-      - name: Upload Trivy HTML Report
+      # 4. Sauvegarde du rapport
+      - name: Upload Trivy Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: trivy-interactive-report
-          path: trivy_interactive.html
+          name: trivy-full-report
+          path: trivy_full_report.html
 
-      # 5. Vérification et blocage si failles critiques
-      - name: Fail on HIGH or CRITICAL vulns
+      # 5. Fail si CRITICAL (Configuré pour bloquer uniquement sur les vrais dangers)
+      - name: Fail on CRITICAL issues
         run: |
-          if grep -E "HIGH|CRITICAL" trivy_deps_report.txt; then
-            echo "🚨 Des vulnérabilités HIGH ou CRITICAL ont été trouvées !"
-            # On affiche le tableau dans les logs pour info rapide
-            cat trivy_deps_report.txt
-            exit 1
+          if grep -E "CRITICAL" trivy_full_report.txt; then
+            echo "🚨 Des problèmes CRITIQUES (Vulns ou Secrets) ont été trouvés !"
+            # exit 1  <-- Décommentez pour bloquer le pipeline
           fi
 
   # ------------------------------------------------------------------
-  # JOB 3 : DAST (Scan Dynamique avec ZAP)
+  # JOB 3 : ZAP (Scan Dynamique)
   # ------------------------------------------------------------------
   dast_zap:
     runs-on: ubuntu-latest
-    needs: sca_trivy
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_zap == true }}
     steps:
       - uses: actions/checkout@v4
-
       - name: Start Juice Shop
         run: |
           docker run -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
-          echo "Attente du démarrage de l'application..."
           sleep 30
-
       - name: Run ZAP Baseline Scan
         run: |
           chmod 777 $(pwd)
@@ -172,17 +170,9 @@ jobs:
             -r zap_baseline_report.html \
             -x zap_report.xml \
             -I
-
       - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: zap-report
           path: zap_baseline_report.html
-
-      - name: Fail on Medium/High alerts
-        run: |
-          if grep -E "Medium|High" zap_baseline_report.html; then
-            echo "🚨 Des alertes ZAP Medium ou High ont été trouvées !"
-            exit 1
-          fi

@@ -1,4 +1,4 @@
-name: CI Security Pipeline (Ultimate)
+name: CI Security Pipeline (Final Standard)
 
 on:
   push:
@@ -12,11 +12,11 @@ on:
         type: boolean
         default: true
       run_trivy:
-        description: 'Lancer Trivy (Image Full) ?'
+        description: 'Lancer Trivy (Full Image) ?'
         type: boolean
         default: true
       run_zap:
-        description: 'Lancer ZAP (Interactive) ?'
+        description: 'Lancer ZAP (Standard) ?'
         type: boolean
         default: true
 
@@ -26,7 +26,6 @@ jobs:
   # ==================================================================
   sonar-scan:
     runs-on: ubuntu-latest
-    # Se lance si c'est un PUSH ou si la case est cochée manuellement
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_sonar == true }}
     steps:
       - uses: actions/checkout@v4
@@ -35,8 +34,7 @@ jobs:
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
-        # continue-on-error pour éviter que le pipeline s'arrête si le tunnel coupe
-        continue-on-error: true 
+        continue-on-error: true # Permet de continuer même si le tunnel coupe
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -49,22 +47,21 @@ jobs:
 
       - name: Quality Gate
         uses: SonarSource/sonarqube-quality-gate-action@v1
-        continue-on-error: true # On laisse passer même si la qualité est mauvaise
+        continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   # ==================================================================
-  # JOB 2 : TRIVY (Scan Complet de l'Image Docker)
+  # JOB 2 : TRIVY (Scan Complet de l'Image Docker + Interactif)
   # ==================================================================
   sca_trivy:
     runs-on: ubuntu-latest
     needs: sonar-scan
-    # Se lance toujours (même si Sonar échoue) sauf si décoché manuellement
     if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.run_trivy == true) }}
     steps:
       - uses: actions/checkout@v4
 
-      # Création du Template HTML pour Trivy
+      # Création du Template HTML Interactif (Juste pour Trivy)
       - name: Create Trivy Template
         run: |
           cat <<'EOF' > interactive.tpl
@@ -135,7 +132,7 @@ jobs:
           </html>
           EOF
 
-      # Scan HTML (Full: Vuln, Secret, Config, License)
+      # Scan HTML Trivy
       - name: Run Trivy (HTML)
         uses: aquasecurity/trivy-action@0.29.0
         with:
@@ -147,7 +144,7 @@ jobs:
           output: 'trivy_full_report.html'
           ignore-unfixed: true
 
-      # Scan Texte (Pour les logs et le blocage éventuel)
+      # Scan Texte Trivy (Pour bloquer la CI si besoin)
       - name: Run Trivy (Text)
         uses: aquasecurity/trivy-action@0.29.0
         with:
@@ -166,7 +163,7 @@ jobs:
           path: trivy_full_report.html
 
   # ==================================================================
-  # JOB 3 : ZAP (Scan Dynamique Interactif)
+  # JOB 3 : ZAP (Scan Standard HTML)
   # ==================================================================
   dast_zap:
     runs-on: ubuntu-latest
@@ -180,7 +177,7 @@ jobs:
           docker run -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
           sleep 30
 
-      # 1. Scan ZAP en mode JSON
+      # REVOICI LA VERSION CLASSIQUE QUE VOUS AVIEZ AVANT
       - name: Run ZAP Baseline Scan
         run: |
           chmod 777 $(pwd)
@@ -188,44 +185,20 @@ jobs:
             -v ${{ github.workspace }}:/zap/wrk:rw \
             zaproxy/zap-stable zap-baseline.py \
             -t http://localhost:3000 \
-            -J zap_report.json \
+            -r zap_baseline_report.html \
+            -x zap_report.xml \
             -I
-
-      # 2. Conversion JSON -> HTML Interactif via Python
-      - name: Convert ZAP JSON to Interactive HTML
-        run: |
-          cat <<EOF > convert_zap.py
-          import json
-          try:
-              with open('zap_report.json', 'r') as f: data = json.load(f)
-          except: data = {"site": []}
-
-          html = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rapport ZAP</title>
-          <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css">
-          <style>body{font-family:Arial,sans-serif;margin:20px} .High{color:red;font-weight:bold} .Medium{color:orange;font-weight:bold} .Low{color:#d6d628} .Informational{color:blue} table.dataTable thead th{background:#333;color:white}</style>
-          </head><body><h1>Rapport ZAP Interactif</h1>
-          <table id="zapTable" class="display" style="width:100%"><thead><tr><th>Alert</th><th>Risk</th><th>URL</th><th>Description</th></tr></thead><tbody>"""
-
-          for site in data.get('site', []):
-              for alert in site.get('alerts', []):
-                  risk = alert.get('riskdesc', 'Low').split(' ')[0]
-                  instances = alert.get('instances', [])
-                  url = f"{instances[0].get('method')} {instances[0].get('uri')}" if instances else ""
-                  html += f"<tr><td>{alert.get('alert')}</td><td class='{risk}'>{risk}</td><td>{url}</td><td>{alert.get('desc')[:200]}...</td></tr>"
-
-          html += """</tbody></table>
-          <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-          <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
-          <script>$(document).ready(function(){$('#zapTable').DataTable();});</script>
-          </body></html>"""
-          
-          with open('zap_interactive.html', 'w') as f: f.write(html)
-          EOF
-          python3 convert_zap.py
 
       - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: zap-interactive-report
-          path: zap_interactive.html
+          name: zap-report
+          path: zap_baseline_report.html
+
+      - name: Fail on Medium/High alerts
+        run: |
+          if grep -E "Medium|High" zap_baseline_report.html; then
+            echo "🚨 Des alertes ZAP Medium ou High ont été trouvées !"
+            # exit 1  <-- Décommentez pour bloquer le pipeline
+          fi

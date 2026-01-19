@@ -83,10 +83,10 @@ jobs:
       - name: Run ZAP Baseline Scan
         run: |
           chmod 777 $(pwd)
-          docker run --rm --network  \
+          docker run --rm --network host \
             -v ${{ github.workspace }}:/zap/wrk:rw \
             zaproxy/zap-stable zap-baseline.py \
-            -t http://local:3000 \
+            -t http://localhost:3000 \
             -r zap_baseline_report.html \
             -x zap_report.xml \
             -I

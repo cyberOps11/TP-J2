@@ -1,0 +1,95 @@
+name: CI Security Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # ------------------------------------------------------------------
+  # JOB 1 : SAST (Analyse Statique du code avec SonarQube)
+  # ------------------------------------------------------------------
+  sonar-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Indispensable pour une analyse Sonar complète
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOSTS_URL: ${{ secrets.SONAR_HOSTS_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=juice-shop-sast
+            -Dsonar.ws.timeout=300
+
+      - name: SonarQube Quality Gate check
+        uses: SonarSource/sonarqube-quality-gate-action@v1
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # JOB 2 : SCA (Analyse des dépendances avec Trivy)
+  # ------------------------------------------------------------------
+  sca_trivy:
+    runs-on: ubuntu-latest
+    needs: sonar-scan
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: 'fs'
+          scanners: 'vuln'
+          format: 'table'
+          output: 'trivy_deps_report.txt'
+
+      - name: Fail on HIGH or CRITICAL vulns
+        run: |
+          if grep -E "HIGH|CRITICAL" trivy_deps_report.txt; then
+            echo "🚨 Des vulnérabilités HIGH ou CRITICAL ont été trouvées !"
+            cat trivy_deps_report.txt
+            exit 1
+          fi
+
+  # ------------------------------------------------------------------
+  # JOB 3 : DAST (Scan Dynamique avec ZAP)
+  # ------------------------------------------------------------------
+  dast_zap:
+    runs-on: ubuntu-latest
+    needs: sca_trivy
+    steps:
+      - uses: actions/checkout@v4
+
+      # Démarrage de l'application cible
+      - name: Start Juice Shop
+        run: |
+          docker run -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
+          echo "Attente du démarrage de l'application..."
+          sleep 30
+
+      # Lancement du scan ZAP Baseline avec la NOUVELLE image
+      - name: Run ZAP Baseline Scan
+        run: |
+          chmod 777 $(pwd)
+          docker run --rm --network  \
+            -v ${{ github.workspace }}:/zap/wrk:rw \
+            zaproxy/zap-stable zap-baseline.py \
+            -t http://local:3000 \
+            -r zap_baseline_report.html \
+            -x zap_report.xml \
+            -I
+
+      # Vérification des résultats
+      - name: Fail on Medium/High alerts
+        run: |
+          if grep -E "Medium|High" zap_baseline_report.html; then
+            echo "🚨 Des alertes ZAP Medium ou High ont été trouvées !"
+            exit 1
+          fi

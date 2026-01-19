@@ -8,27 +8,27 @@ on:
 
 jobs:
   # ------------------------------------------------------------------
-  # JOB 1 : SAST (Analyse Statique du code avec SonarQube)
+  # JOB 1 : SAST (Analyse Statique avec SonarQube)
   # ------------------------------------------------------------------
   sonar-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Indispensable pour une analyse Sonar complète
+          fetch-depth: 0
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOSTS_URL: ${{ secrets.SONAR_HOSTZ_URL }}
+          SONAR_HOSTZ_URL: ${{ secrets.SONAR_HOSTZ_URL }}
         with:
           args: >
             -Dsonar.projectKey=juice-shop-sast
             -Dsonar.ws.timeout=300
             -Dsonar.scanner.skipJreProvisioning=true
             -Dsonar.verbose=true
-            -Dsonar.host.url=${{ secrets.SONAR_HOSTZ_URL }}
+            -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
             -Dsonar.exclusions=**/*.py,**/*.xml,**/*.css
 
       - name: SonarQube Quality Gate check
@@ -55,6 +55,14 @@ jobs:
           format: 'table'
           output: 'trivy_deps_report.txt'
 
+      # --- AJOUT CRUCIAL : Sauvegarde du rapport ---
+      - name: Upload Trivy Report
+        uses: actions/upload-artifact@v4
+        if: always()  # Sauvegarde même si des failles sont trouvées !
+        with:
+          name: trivy-report
+          path: trivy_deps_report.txt
+
       - name: Fail on HIGH or CRITICAL vulns
         run: |
           if grep -E "HIGH|CRITICAL" trivy_deps_report.txt; then
@@ -72,14 +80,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Démarrage de l'application cible
       - name: Start Juice Shop
         run: |
           docker run -d --name juice-shop -p 3000:3000 bkimminich/juice-shop
           echo "Attente du démarrage de l'application..."
           sleep 30
 
-      # Lancement du scan ZAP Baseline avec la NOUVELLE image
       - name: Run ZAP Baseline Scan
         run: |
           chmod 777 $(pwd)
@@ -91,7 +97,14 @@ jobs:
             -x zap_report.xml \
             -I
 
-      # Vérification des résultats
+      # --- AJOUT CRUCIAL : Sauvegarde du rapport ---
+      - name: Upload ZAP Report
+        uses: actions/upload-artifact@v4
+        if: always() # Sauvegarde même si des alertes sont trouvées !
+        with:
+          name: zap-report
+          path: zap_baseline_report.html
+
       - name: Fail on Medium/High alerts
         run: |
           if grep -E "Medium|High" zap_baseline_report.html; then

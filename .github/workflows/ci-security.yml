@@ -21,7 +21,7 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOSTZ_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         with:
           args: >
             -Dsonar.projectKey=juice-shop-sast
@@ -47,7 +47,81 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
+      # 1. Création du fichier template à la volée (via Bash)
+      # On utilise 'EOF' entre quotes pour ne pas casser les variables {{ . }}
+      - name: Create Interactive Template
+        run: |
+          cat <<'EOF' > interactive.tpl
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+            <title>Rapport Trivy - Filtres Activés</title>
+            <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.4/css/jquery.dataTables.min.css">
+            <style>
+              body { font-family: Arial, sans-serif; margin: 20px; }
+              h1 { text-align: center; }
+              .critical { color: red; font-weight: bold; }
+              .high { color: orange; font-weight: bold; }
+              .medium { color: #d6d628; font-weight: bold; }
+              .low { color: blue; font-weight: bold; }
+              table.dataTable thead th { background-color: #333; color: white; }
+            </style>
+          </head>
+          <body>
+            <h1>Rapport de Vulnérabilités Juice Shop</h1>
+            <table id="vulnTable" class="display" style="width:100%">
+              <thead>
+                <tr>
+                  <th>Library</th>
+                  <th>Vulnerability ID</th>
+                  <th>Severity</th>
+                  <th>Installed Version</th>
+                  <th>Fixed Version</th>
+                </tr>
+              </thead>
+              <tbody>
+                {{- range . }}
+                  {{- range .Vulnerabilities }}
+                <tr>
+                  <td>{{ .PkgName }}</td>
+                  <td>{{ .VulnerabilityID }}</td>
+                  <td class="{{ .VulnerabilityID }} {{ .Severity }}">
+                      {{ if eq .Severity "CRITICAL" }}<span class="critical">CRITICAL</span>
+                      {{ else if eq .Severity "HIGH" }}<span class="high">HIGH</span>
+                      {{ else if eq .Severity "MEDIUM" }}<span class="medium">MEDIUM</span>
+                      {{ else }}<span class="low">{{ .Severity }}</span>{{ end }}
+                  </td>
+                  <td>{{ .InstalledVersion }}</td>
+                  <td>{{ .FixedVersion }}</td>
+                </tr>
+                  {{- end }}
+                {{- end }}
+              </tbody>
+            </table>
+            <script type="text/javascript" src="https://code.jquery.com/jquery-3.5.1.js"></script>
+            <script type="text/javascript" src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+            <script>
+              $(document).ready(function () {
+                $('#vulnTable').DataTable({ paging: false, order: [[2, 'asc']] });
+              });
+            </script>
+          </body>
+          </html>
+          EOF
+
+      # 2. Premier scan : Génération du rapport HTML (pour l'humain)
+      - name: Run Trivy (HTML Report)
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          scan-type: 'fs'
+          scanners: 'vuln'
+          format: 'template'
+          template: '@interactive.tpl'
+          output: 'trivy_interactive.html'
+
+      # 3. Deuxième scan : Génération du rapport TXT (pour le script de blocage)
+      - name: Run Trivy (Text Check)
         uses: aquasecurity/trivy-action@0.29.0
         with:
           scan-type: 'fs'
@@ -55,18 +129,20 @@ jobs:
           format: 'table'
           output: 'trivy_deps_report.txt'
 
-      # --- AJOUT CRUCIAL : Sauvegarde du rapport ---
-      - name: Upload Trivy Report
+      # 4. Sauvegarde du rapport HTML Interactif
+      - name: Upload Trivy HTML Report
         uses: actions/upload-artifact@v4
-        if: always()  # Sauvegarde même si des failles sont trouvées !
+        if: always()
         with:
-          name: trivy-report
-          path: trivy_deps_report.txt
+          name: trivy-interactive-report
+          path: trivy_interactive.html
 
+      # 5. Vérification et blocage si failles critiques
       - name: Fail on HIGH or CRITICAL vulns
         run: |
           if grep -E "HIGH|CRITICAL" trivy_deps_report.txt; then
             echo "🚨 Des vulnérabilités HIGH ou CRITICAL ont été trouvées !"
+            # On affiche le tableau dans les logs pour info rapide
             cat trivy_deps_report.txt
             exit 1
           fi
@@ -97,10 +173,9 @@ jobs:
             -x zap_report.xml \
             -I
 
-      # --- AJOUT CRUCIAL : Sauvegarde du rapport ---
       - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
-        if: always() # Sauvegarde même si des alertes sont trouvées !
+        if: always()
         with:
           name: zap-report
           path: zap_baseline_report.html

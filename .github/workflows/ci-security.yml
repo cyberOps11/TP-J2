@@ -29,6 +29,7 @@ jobs:
             -Dsonar.scanner.skipJreProvisioning=true
             -Dsonar.verbose=true
             -Dsonar.host.url=${{ secrets.SONAR_HOSTZ_URL }}
+            -Dsonar.exclusions=**/*.py,**/*.xml,**/*.css
 
       - name: SonarQube Quality Gate check
         uses: SonarSource/sonarqube-quality-gate-action@v1
